@@ -238,7 +238,7 @@ python -m venv .venv; .\.venv\Scripts\Activate.ps1
 
 pip install -r requirements.txt
 pip install pre-commit
-pre-commit install
+pre-commit install  # enforces ruff + pytest on commit
 
 # Run the pipeline on a sample task
 python pipeline.py "Test task"
@@ -246,7 +246,6 @@ python pipeline.py "Test task"
 
 ### Code style
 
-- Code and comments: English only
 - Commit messages: Conventional Commits (`feat(pipeline): ...`, `fix(tester): ...`)
 - Run `ruff check` and `pytest` before pushing (enforced by pre-commit)
 
