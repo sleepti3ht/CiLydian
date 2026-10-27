@@ -1,0 +1,24 @@
+# Example hybrid profile on free-tier cloud endpoints.
+# Copy to config.toml and export the referenced env vars (see .env.example).
+
+[pipeline]
+max_iter = 3
+judge_blocking = false
+
+[roles.spec]
+provider = "openai_compat"
+base_url = "https://openrouter.ai/api/v1"
+model = "deepseek/deepseek-chat"
+api_key_env = "OPENROUTER_API_KEY"
+
+[roles.coder]
+provider = "openai_compat"
+base_url = "https://openrouter.ai/api/v1"
+model = "deepseek/deepseek-chat"
+api_key_env = "OPENROUTER_API_KEY"
+
+[roles.judge]
+provider = "openai_compat"
+base_url = "https://api.groq.com/openai/v1"
+model = "llama-3.3-70b-versatile"
+api_key_env = "GROQ_API_KEY"

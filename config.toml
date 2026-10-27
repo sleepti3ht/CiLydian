@@ -1,0 +1,19 @@
+# CiLydian role -> model mapping.
+# Every role runs on local Ollama or any OpenAI-compatible endpoint.
+# API keys are NEVER stored here: roles reference env var names instead.
+
+[pipeline]
+max_iter = 3
+judge_blocking = false   # false = judge advisory; deterministic gates block
+
+[roles.spec]
+provider = "ollama"
+model = "qwen2.5-coder:7b"
+
+[roles.coder]
+provider = "ollama"
+model = "qwen2.5-coder:7b"
+
+[roles.judge]
+provider = "ollama"
+model = "qwen2.5:14b"

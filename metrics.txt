@@ -1,0 +1,4 @@
+#metrics.txt
+python pipeline.py
+Get-Content logs\judge.log -Tail 3
+Measure-Command { python pipeline.py }

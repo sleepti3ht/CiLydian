@@ -1,0 +1,6 @@
+#requirements.txt
+langgraph>=1.0
+langchain-ollama>=1.0
+langchain-openai>=1.0
+pytest>=8.0
+ruff>=0.7
