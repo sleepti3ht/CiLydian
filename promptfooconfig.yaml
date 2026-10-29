@@ -34,15 +34,15 @@ tests:
         Acceptance: limits concurrent requests, no race conditions
       code: |
         import asyncio
-        
+
         class RateLimiter:
             def __init__(self, max_concurrent: int):
                 self._sem = asyncio.Semaphore(max_concurrent)
-            
+
             async def __aenter__(self):
                 await self._sem.acquire()
                 return self
-            
+
             async def __aexit__(self, *args):
                 self._sem.release()
     assert:

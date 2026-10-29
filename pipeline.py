@@ -108,7 +108,7 @@ def strip_fences(text: str) -> str:
     t = text.strip()
     if t.startswith("```"):
         t = t.split("\n", 1)[1] if "\n" in t else t[3:]
-        if "```" in t:               # closing fence with prose after it
+        if "```" in t:  # closing fence with prose after it
             t = t.split("```", 1)[0]
         return t.rstrip()
     return t
@@ -142,15 +142,22 @@ def ensure_isolation() -> None:
 def run(cmd: list[str], cwd: str) -> subprocess.CompletedProcess:
     """Run a gate tool; force UTF-8 decoding (Windows locales default to cp1251)."""
     return subprocess.run(
-        cmd, check=False, capture_output=True, text=True,
-        encoding="utf-8", errors="replace", cwd=cwd,
+        cmd,
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        cwd=cwd,
     )
 
 
 def preflight() -> None:
     for tool in ("ruff", "pytest"):
         if shutil.which(tool) is None:
-            raise SystemExit(f"[preflight] {tool} not found on PATH (see requirements.txt)")
+            raise SystemExit(
+                f"[preflight] {tool} not found on PATH (see requirements.txt)"
+            )
     try:
         CODER.invoke("ping")
     except Exception as exc:
@@ -206,7 +213,9 @@ def coder(s: State):
     prompt = f"SPEC:\n{s['spec']}\n"
     try:
         with open(os.path.join(LOG_DIR, "test_candidate.py"), encoding="utf-8") as f:
-            prompt += f"TESTS that must pass (match names/signatures exactly):\n{f.read()}\n"
+            prompt += (
+                f"TESTS that must pass (match names/signatures exactly):\n{f.read()}\n"
+            )
     except OSError:
         pass
     prompt += (
@@ -233,7 +242,7 @@ def judge(s: State):
     ).content
     a, b = raw.find("{"), raw.rfind("}")
     try:
-        verdict = json.loads(raw[a:b + 1]) if a != -1 else {}
+        verdict = json.loads(raw[a : b + 1]) if a != -1 else {}
     except json.JSONDecodeError:
         verdict = {}
     if not isinstance(verdict, dict):
@@ -270,24 +279,41 @@ def tester(s: State):
     if ruff.returncode != 0:
         # Short-circuit: no point running pytest on code that fails lint/syntax.
         log("tester", f"ruff rc={ruff.returncode}\n{ruff.stdout[:500]}")
-        return {"code": fixed, "verdict": {
-            **s["verdict"], "gate": "ruff+pytest", "verdict": "fail",
-            "issues": s["verdict"].get("issues", []) + [f"ruff:{ruff.stdout[:300]}"],
-        }}
+        return {
+            "code": fixed,
+            "verdict": {
+                **s["verdict"],
+                "gate": "ruff+pytest",
+                "verdict": "fail",
+                "issues": s["verdict"].get("issues", [])
+                + [f"ruff:{ruff.stdout[:300]}"],
+            },
+        }
     pytest_run = run(["pytest", "test_candidate.py", "-q", "--tb=short"], LOG_DIR)
     ok = pytest_run.returncode == 0
-    log("tester", f"ruff rc=0\npytest rc={pytest_run.returncode}\n{pytest_run.stdout[-500:]}")
+    log(
+        "tester",
+        f"ruff rc=0\npytest rc={pytest_run.returncode}\n{pytest_run.stdout[-500:]}",
+    )
     extra_issues = [] if ok else [f"pytest:{pytest_run.stdout[:300]}"]
-    return {"code": fixed, "verdict": {
-        **s["verdict"], "gate": "ruff+pytest",
-        "verdict": "pass" if ok else "fail",
-        "issues": s["verdict"].get("issues", []) + extra_issues,
-    }}
+    return {
+        "code": fixed,
+        "verdict": {
+            **s["verdict"],
+            "gate": "ruff+pytest",
+            "verdict": "pass" if ok else "fail",
+            "issues": s["verdict"].get("issues", []) + extra_issues,
+        },
+    }
 
 
 def route(s: State) -> Literal["coder", "tester"]:
     """Judge is advisory by default; flip JUDGE_BLOCKING to make it a gate."""
-    if JUDGE_BLOCKING and s["verdict"]["verdict"] == "fail" and s["iteration"] < MAX_ITER:
+    if (
+        JUDGE_BLOCKING
+        and s["verdict"]["verdict"] == "fail"
+        and s["iteration"] < MAX_ITER
+    ):
         return "coder"
     return "tester"
 
@@ -318,13 +344,16 @@ def main() -> int:
         description="Agentic CI pipeline: spec -> coder -> judge -> deterministic gates"
     )
     parser.add_argument(
-        "idea", 
-        nargs="?", 
+        "idea",
+        nargs="?",
         default=DEFAULT_IDEA,
-        help="One-line task description (e.g., 'Async rate limiter with token bucket')"
+        help="One-line task description (e.g., 'Async rate limiter with token bucket')",
     )
-    parser.add_argument("--config", default="config.toml",
-                        help="path to role/model config (default: config.toml)")
+    parser.add_argument(
+        "--config",
+        default="config.toml",
+        help="path to role/model config (default: config.toml)",
+    )
     args = parser.parse_args()
 
     load_dotenv()
@@ -341,7 +370,9 @@ def main() -> int:
         {"idea": args.idea, "spec": "", "code": "", "verdict": {}, "iteration": 0}
     )
     print(json.dumps(result["verdict"], ensure_ascii=False, indent=2))
-    return 0 if result["verdict"].get("verdict") == "pass" else 1  # CI-friendly exit code
+    return (
+        0 if result["verdict"].get("verdict") == "pass" else 1
+    )  # CI-friendly exit code
 
 
 if __name__ == "__main__":
