@@ -196,12 +196,11 @@ GROQ_API_KEY=your_key_here
 
 ---
 
-## Limitations
+## Honest Limitations
 
-- On 8 GB VRAM, a 14B judge runs partially on CPU (3–6 tok/s). For interactive use, prefer a cloud profile or a 7B judge.
-- Mid-complexity tasks may need >3 iterations to converge; raise `MAX_ITER` at the cost of wall time.
-- Python-only for now. Multi-language support is on the roadmap.
-- Local models under ~7B frequently produce unparseable JSON for the judge; defensive parsing handles this, but quality is what it is.
+- **Local models (7b-14b) fail convergence** on mid-complexity tasks (e.g., sliding-window rate limiter with exact boolean return) within 3 iterations.
+- **Cloud free-tier models (Groq gpt-oss-120b)** provide better judge quality but have rate limits (200K tokens/day).
+- **CiLydian is an experiment and portfolio artifact**, not a daily development tool. For production code, use manual multi-vendor workflow (DeepSeek/Qwen for prompting, Claude for architecture, Gemini for review, local ruff/pytest for gates).
 
 ---
 
