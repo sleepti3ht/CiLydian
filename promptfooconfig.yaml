@@ -1,0 +1,58 @@
+﻿prompts:
+  - id: judge-v1
+    raw: |
+      Rate 1-5: correctness, security, simplicity. Judge ONLY against
+      the SPEC's measurable acceptance criteria; do not request features
+      beyond the SPEC. Check against SPEC:
+      {{spec}}
+      CODE:
+      {{code}}
+      Return JSON only: {"score": int, "verdict": "pass"|"fail", "issues": [str]}
+
+  - id: judge-v2
+    raw: |
+      Rate 1-5: correctness, security, simplicity. Judge ONLY against
+      the SPEC's measurable acceptance criteria; do not request features
+      beyond the SPEC. Check against SPEC:
+      {{spec}}
+      CODE:
+      {{code}}
+      Return JSON only: {"score": int, "verdict": "pass"|"fail", "issues": [str]}
+      CRITICAL: Output ONLY raw JSON. NO markdown fences.
+      CORRECT: {"score": 4, "verdict": "pass", "issues": []}
+      WRONG: ```json{"score": 4}```
+
+providers:
+  - ollama:chat:qwen2.5-coder:7b
+  - ollama:chat:qwen2.5:14b
+
+tests:
+  - vars:
+      spec: |
+        Role: Rate limiter for CVE scanner
+        Constraints: asyncio.Semaphore, configurable max_concurrent
+        Acceptance: limits concurrent requests, no race conditions
+      code: |
+        import asyncio
+        
+        class RateLimiter:
+            def __init__(self, max_concurrent: int):
+                self._sem = asyncio.Semaphore(max_concurrent)
+            
+            async def __aenter__(self):
+                await self._sem.acquire()
+                return self
+            
+            async def __aexit__(self, *args):
+                self._sem.release()
+    assert:
+      - type: contains-json
+      - type: is-json
+      - type: llm-rubric
+        value: "Should rate 4-5, verdict=pass, no feature requests beyond SPEC"
+
+defaultTest:
+  options:
+    provider:
+      id: ollama:chat:qwen2.5:14b
+    timeout: 30000

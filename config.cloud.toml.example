@@ -20,5 +20,5 @@ api_key_env = "OPENROUTER_API_KEY"
 [roles.judge]
 provider = "openai_compat"
 base_url = "https://api.groq.com/openai/v1"
-model = "llama-3.3-70b-versatile"
+model = "openai/gpt-oss-120b"
 api_key_env = "GROQ_API_KEY"

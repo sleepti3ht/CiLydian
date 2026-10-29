@@ -5,3 +5,7 @@ __pycache__/
 .env
 logs/
 *.old
+.env
+.promptfoo/
+dspy_compiled/
+*.pkl

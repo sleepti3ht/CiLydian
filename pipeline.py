@@ -208,7 +208,10 @@ def judge(s: State):
         "Rate 1-5: correctness, security, simplicity. Judge ONLY against "
         "the SPEC's measurable acceptance criteria; do not request features "
         f"beyond the SPEC. Check against SPEC:\n{s['spec']}\nCODE:\n{s['code']}\n"
-        'Return JSON only: {"score": int, "verdict": "pass"|"fail", "issues": [str]}'
+        'Return JSON only: {"score": int, "verdict": "pass"|"fail", "issues": [str]}\n\n'
+        'CRITICAL: Output ONLY raw JSON. NO markdown fences. NO ```json wrapper.\n'
+        'CORRECT: {"score": 4, "verdict": "pass", "issues": []}\n'
+        'WRONG: ```json{"score": 4, "verdict": "pass", "issues": []}```'
     ).content
     a, b = raw.find("{"), raw.rfind("}")
     try:
