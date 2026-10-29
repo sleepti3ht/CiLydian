@@ -169,12 +169,6 @@ def spec_writer(s: State):
     """Stage 0: turn a one-line idea into a SPEC plus a pytest skeleton."""
     spec = SPEC_LLM.invoke(
         "Turn this idea into a MINIMAL SPEC. Include ONLY what the idea states.\n"
-        "Sections: Role; Interface (exact class name and method signatures the "
-        "implementation MUST expose); Constraints; Measurable Acceptance Criteria "
-        "(max 5, unit-testable); Test Plan (max 5 tests, 1:1 mapping to criteria).\n"
-        "FORBIDDEN unless the idea explicitly requests them: security compliance, "
-        "abuse prevention, authentication, monitoring, logging, UAT, post-release "
-        "monitoring, performance measurement, config files, documentation.\n"
         "Sections: Role; Interface (exact PYTHON class/method signatures the "
         "implementation MUST expose - never Java/Go/other languages); Constraints; "
         "Measurable Acceptance Criteria (max 5, unit-testable); Test Plan (max 5 "
@@ -182,7 +176,10 @@ def spec_writer(s: State):
         "If the task involves time, windows, or delays: the Interface MUST include "
         "an injectable clock parameter (e.g. clock: Callable[[], float] = "
         "time.monotonic), and the Test Plan MUST drive time through a fake clock. "
-        "Real sleeps and wall-clock measurements are FORBIDDEN in tests.\n"        
+        "Real sleeps and wall-clock measurements are FORBIDDEN in tests.\n"
+        "FORBIDDEN unless the idea explicitly requests them: security compliance, "
+        "abuse prevention, authentication, monitoring, logging, UAT, post-release "
+        "monitoring, performance measurement, config files, documentation.\n"
         f"Idea: {s['idea']}"
     ).content
     tests = CODER.invoke(
