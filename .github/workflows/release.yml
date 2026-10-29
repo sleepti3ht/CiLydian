@@ -13,6 +13,7 @@ jobs:
       url: https://pypi.org/p/cilydian
     permissions:
       id-token: write
+      contents: write
     steps:
       - uses: actions/checkout@v5
 
