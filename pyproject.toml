@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=61.0"]
+requires = ["setuptools>=77.0.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,7 +7,8 @@ name = "cilydian"
 version = "0.1.0"
 description = "Self-hosted agentic CI pipeline with spec-driven codegen"
 readme = "README.md"
-license = {text = "MIT"}
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.12"
 authors = [
     {name = "sleepti3ht", email = "sleepti3ht@gmail.com"}
@@ -24,3 +25,6 @@ cilydian = "pipeline:main"
 [project.urls]
 Homepage = "https://github.com/sleepti3ht/CiLydian"
 Repository = "https://github.com/sleepti3ht/CiLydian"
+
+[tool.setuptools]
+py-modules = ["pipeline"]

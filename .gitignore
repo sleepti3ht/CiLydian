@@ -9,3 +9,6 @@ logs/
 .promptfoo/
 dspy_compiled/
 *.pkl
+dist/
+build/
+*.egg-info/
