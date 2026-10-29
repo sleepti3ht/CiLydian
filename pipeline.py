@@ -26,7 +26,7 @@ from langgraph.graph import END, StateGraph
 LOG_DIR = "logs"
 LOG_CAP = 5_000_000  # rotate a log once it exceeds this many bytes
 DEFAULT_IDEA = "Rate limiter on asyncio.Semaphore for CVE scanner"
-_FENCE = re.compile(r"^```[\w-]*[ \t]*\n(.*?)\n?[ \t]*```$", re.DOTALL)
+_FENCE_BLOCK = re.compile(r"```[\w-]*[ \t]*\n(.*?)\n[ \t]*```", re.DOTALL)
 
 # Populated by init_models(); graph nodes read these globals at call time.
 SPEC_LLM = None
@@ -101,16 +101,16 @@ def init_models(cfg: dict) -> None:
 
 
 def strip_fences(text: str) -> str:
-    """Remove markdown code fences; models wrap code in them unpredictably."""
-    t = text.strip()
-    m = _FENCE.match(t)
+    """Extract the first fenced code block; models append prose after it."""
+    m = _FENCE_BLOCK.search(text)
     if m:
         return m.group(1)
+    t = text.strip()
     if t.startswith("```"):
         t = t.split("\n", 1)[1] if "\n" in t else t[3:]
-        t = t.rstrip()
-        if t.endswith("```"):
-            t = t[:-3].rstrip()
+        if "```" in t:               # closing fence with prose after it
+            t = t.split("```", 1)[0]
+        return t.rstrip()
     return t
 
 
@@ -131,11 +131,12 @@ def reset_logs() -> None:
 
 def ensure_isolation() -> None:
     """Stop ruff/pytest from inheriting the parent project's configs."""
+    os.makedirs(LOG_DIR, exist_ok=True)  # ← Добавленная строка
     if not os.path.exists(os.path.join(LOG_DIR, "ruff.toml")):
         open(os.path.join(LOG_DIR, "ruff.toml"), "w", encoding="utf-8").close()
     if not os.path.exists(os.path.join(LOG_DIR, "pytest.ini")):
         with open(os.path.join(LOG_DIR, "pytest.ini"), "w", encoding="utf-8") as f:
-            f.write("[pytest]\n")
+            f.write("[pytest]\nasyncio_mode = auto\n")
 
 
 def run(cmd: list[str], cwd: str) -> subprocess.CompletedProcess:
@@ -167,8 +168,22 @@ class State(TypedDict):
 def spec_writer(s: State):
     """Stage 0: turn a one-line idea into a SPEC plus a pytest skeleton."""
     spec = SPEC_LLM.invoke(
-        "Turn this idea into a SPEC: role, constraints, measurable "
-        f"acceptance criteria, test plan. Idea: {s['idea']}"
+        "Turn this idea into a MINIMAL SPEC. Include ONLY what the idea states.\n"
+        "Sections: Role; Interface (exact class name and method signatures the "
+        "implementation MUST expose); Constraints; Measurable Acceptance Criteria "
+        "(max 5, unit-testable); Test Plan (max 5 tests, 1:1 mapping to criteria).\n"
+        "FORBIDDEN unless the idea explicitly requests them: security compliance, "
+        "abuse prevention, authentication, monitoring, logging, UAT, post-release "
+        "monitoring, performance measurement, config files, documentation.\n"
+        "Sections: Role; Interface (exact PYTHON class/method signatures the "
+        "implementation MUST expose - never Java/Go/other languages); Constraints; "
+        "Measurable Acceptance Criteria (max 5, unit-testable); Test Plan (max 5 "
+        "tests, 1:1 mapping to criteria).\n"
+        "If the task involves time, windows, or delays: the Interface MUST include "
+        "an injectable clock parameter (e.g. clock: Callable[[], float] = "
+        "time.monotonic), and the Test Plan MUST drive time through a fake clock. "
+        "Real sleeps and wall-clock measurements are FORBIDDEN in tests.\n"        
+        f"Idea: {s['idea']}"
     ).content
     tests = CODER.invoke(
         f"Generate a pytest file for this spec:\n{spec}\n"
@@ -176,6 +191,11 @@ def spec_writer(s: State):
         "Import the module under test as `from candidate import ...`, "
         "NOT as `from logs.candidate import ...`. "
         "Output raw python code only, no markdown fences."
+        "Tests must call ONLY the class and methods listed in the SPEC Interface "
+        "section, with exact names and signatures. No invented API.\n"
+        "Tests must NEVER call time.sleep or measure wall-clock time. If the SPEC "
+        "defines an injectable clock, construct a fake clock and advance it "
+        "explicitly to simulate window expiry.\n"
     ).content
     with open(os.path.join(LOG_DIR, "test_candidate.py"), "w", encoding="utf-8") as f:
         f.write(strip_fences(tests))
@@ -195,7 +215,8 @@ def coder(s: State):
     prompt += (
         f"Issues to fix: {feedback}\n"
         "Write only the Python implementation for module `candidate`. "
-        "Raw code only, no markdown fences, no tests."
+        "Raw code only, no markdown fences, no tests. "
+        "NO explanations, NO headers, NO prose after the code."
     )
     code = strip_fences(CODER.invoke(prompt).content)
     log("coder", code)
@@ -209,7 +230,7 @@ def judge(s: State):
         "the SPEC's measurable acceptance criteria; do not request features "
         f"beyond the SPEC. Check against SPEC:\n{s['spec']}\nCODE:\n{s['code']}\n"
         'Return JSON only: {"score": int, "verdict": "pass"|"fail", "issues": [str]}\n\n'
-        'CRITICAL: Output ONLY raw JSON. NO markdown fences. NO ```json wrapper.\n'
+        'CRITICAL: Output ONLY raw JSON. NO markdown fences.\n'
         'CORRECT: {"score": 4, "verdict": "pass", "issues": []}\n'
         'WRONG: ```json{"score": 4, "verdict": "pass", "issues": []}```'
     ).content
