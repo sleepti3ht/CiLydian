@@ -3,9 +3,11 @@
 __pycache__/
 *.pyc
 .env
+runs/
+memory.db*
+checkpoints.db*
 logs/
 *.old
-.env
 .promptfoo/
 dspy_compiled/
 *.pkl

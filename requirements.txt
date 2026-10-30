@@ -5,3 +5,5 @@ langchain-openai>=1.0
 pytest>=8.0
 pytest-asyncio>=0.24
 ruff>=0.7
+pre-commit>=3.0
+langgraph-checkpoint-sqlite>=2.0

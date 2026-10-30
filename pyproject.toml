@@ -4,15 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cilydian"
-version = "0.1.4"
-description = "Self-hosted agentic CI pipeline with spec-driven codegen"
+version = "0.2.0"
+description = "Self-hosted agentic CI pipeline: spec-driven codegen with advisory LLM judge, HITL checkpoints and deterministic gates"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.12"
-authors = [
-    {name = "sleepti3ht", email = "sleepti3ht@gmail.com"}
-]
+authors = [{name = "sleepti3ht", email = "sleepti3ht@gmail.com"}]
 dependencies = [
     "langgraph>=1.0",
     "langchain-ollama>=1.0",
@@ -22,9 +20,13 @@ dependencies = [
 [project.scripts]
 cilydian = "pipeline:main"
 
-[project.urls]
-Homepage = "https://github.com/sleepti3ht/CiLydian"
-Repository = "https://github.com/sleepti3ht/CiLydian"
+[project.optional-dependencies]
+hitl = ["langgraph-checkpoint-sqlite>=2.0"]
+dev = ["pytest>=8.0", "ruff>=0.7", "pre-commit>=3.0"]
 
 [tool.setuptools]
 py-modules = ["pipeline"]
+
+[project.urls]
+Homepage = "https://github.com/sleepti3ht/CiLydian"
+Repository = "https://github.com/sleepti3ht/CiLydian"

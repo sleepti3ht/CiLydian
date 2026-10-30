@@ -6,7 +6,8 @@
 [![langgraph](https://img.shields.io/badge/LangGraph-1.0%2B-b58900?style=flat)](https://langchain-ai.github.io/langgraph/)
 [![status](https://img.shields.io/badge/status-active-859900?style=flat)](https://github.com)
 [![license](https://img.shields.io/badge/license-MIT-fdf6e3?style=flat)](LICENSE)
-
+[![PyPI version](https://img.shields.io/pypi/v/cilydian.svg)](https://pypi.org/project/cilydian/)
+[![pre-commit.ci status](https://results.pre-commit.ci/badge/github/sleepti3ht/CiLydian/main.svg)](https://results.pre-commit.ci/latest/github/sleepti3ht/CiLydian/main)
 </div>
 
 > Self-hosted agentic CI pipeline on LangGraph: **spec → coder → LLM judge (advisory) → deterministic gates (ruff + pytest)**, with a bounded repair loop and human escalation. Models are pluggable per role — local Ollama or any OpenAI-compatible endpoint.
