@@ -1,3 +1,4 @@
+
 <div align="center">
 
 # CiLydian
@@ -10,13 +11,17 @@
 [![pre-commit.ci status](https://results.pre-commit.ci/badge/github/sleepti3ht/CiLydian/main.svg)](https://results.pre-commit.ci/latest/github/sleepti3ht/CiLydian/main)
 </div>
 
-> Self-hosted agentic CI pipeline on LangGraph: **spec → coder → LLM judge (advisory) → deterministic gates (ruff + pytest)**, with a bounded repair loop and human escalation. Models are pluggable per role — local Ollama or any OpenAI-compatible endpoint.
+> Self-hosted agentic CI pipeline on LangGraph: **spec → coder → LLM judge (advisory) → deterministic gates (ruff + pytest)**, with a bounded repair loop, self-learning instincts, and human escalation. Models are pluggable per role — local Ollama or any OpenAI-compatible endpoint.
 
 ---
 
 ## Why CiLydian?
 
 Most multi-agent coding tools stop at "generate and hope." CiLydian treats LLM output as untrusted input: mechanical gates (ruff, pytest) are the source of truth, the LLM judge is advisory feedback, and the loop is bounded. If the pipeline can't converge in `MAX_ITER`, it exits with a status code and the full log — never hangs, never burns tokens indefinitely.
+
+**Self-learning from failures.** When the coder gets stuck (early abort) or ruff catches missing imports (F821), the system records the lesson in an `instincts` table. Future runs inject these lessons into the coder prompt, reducing repeated mistakes.
+
+**Eval-driven prompt engineering.** Cached verdicts export to promptfoo test suites with deterministic assertions — no grading tokens spent, corpus grows with every run.
 
 Compared to AutoGen Studio or CrewAI: those are chat-orchestration frameworks. CiLydian is a **CI primitive** — it runs, exits with a status code, and can be wired into git hooks, GitHub Actions, or cron.
 
@@ -25,24 +30,16 @@ Compared to AutoGen Studio or CrewAI: those are chat-orchestration frameworks. C
 ## Quick Start
 
 ```bash
-# Clone and setup
-git clone https://github.com/sleepti3ht/cilydian.git
-cd cilydian
-
-# Unix / macOS
-python -m venv .venv && source .venv/bin/activate
-# Windows (PowerShell)
-python -m venv .venv; .\.venv\Scripts\Activate.ps1
-
-pip install -r requirements.txt
+# Install from PyPI
+pip install cilydian
 
 # Run with local Ollama (default)
-python pipeline.py "Your task description"
+cilydian run "Your task description"
 
-# Or use cloud profile (free tiers)
+# Or use the cloud profile
 cp config.cloud.toml.example config.toml
 cp .env.example .env  # fill with OpenRouter/Groq keys
-python pipeline.py "Your task description"
+cilydian run "Your task description"
 ```
 
 Stack: `langgraph`, `langchain-ollama`, `langchain-openai`, `ruff`, `pytest`. See `requirements.txt`.
@@ -53,7 +50,9 @@ Stack: `langgraph`, `langchain-ollama`, `langchain-openai`, `ruff`, `pytest`. Se
 
 ### Core
 - **Spec-driven generation**: turn one-line ideas into a `SPEC.md` and a `test_candidate.py` skeleton before any code is written
+- **Spec-first**: `--spec FILE` skips LLM spec generation for human-authored specs (source of truth)
 - **Bounded repair loop**: coder iterates on judge feedback up to `MAX_ITER` times, then escalates to a human
+- **Early abort**: detects when coder produces byte-identical code across iterations (hash comparison), exits early to save tokens
 - **Advisory LLM judge**: semantic review that never blocks on its own verdict (see [Design notes](#design-notes))
 - **Deterministic gates**: `ruff` (auto-fix + check) and `pytest`; these are what actually block the pipeline
 - **Short-circuit**: pytest is skipped if ruff fails, saves 10–20s per failed cycle
@@ -61,12 +60,23 @@ Stack: `langgraph`, `langchain-ollama`, `langchain-openai`, `ruff`, `pytest`. Se
 - **Rate-limit resilience**: exponential backoff for 429s on free tiers
 - **UTF-8 on Windows**: subprocess encoding prevents `cp1251` mojibake in logs
 
+### Self-learning
+- **Instincts table**: SQLite-based lesson memory. Early abort and ruff F821 events seed lessons; top-N injected into coder prompt
+- **Verdict cache**: SQLite-cached judge verdicts by hash (spec + code + model + temperature + prompt version), saves tokens on repeated code
+- **Export-eval**: `python pipeline.py export-eval` dumps cached verdicts as promptfoo tests with deterministic Python assertions (no grading tokens)
+- **Instincts CLI**: `python pipeline.py instincts show|add|clear` to inspect/manage learned lessons
+
+### Human-in-the-loop
+- **Interrupt points**: `interrupt()` on spec (continue/edit/reject) and escalation (accept/retry/abort) when HITL is enabled
+- **Checkpoint persistence**: `SqliteSaver` checkpoints enable resume after Ctrl+C (via [cilydian-studio](#companion-cilydian-studio))
+- **Studio client**: Textual TUI for interactive HITL sessions (separate package, see below)
+
 ### Reliability
 - **Defensive JSON parsing**: judge verdicts normalized via `try: int(float(raw))`
 - **Programmatic guardrail**: `score < 4` with `verdict="pass"` is auto-downgraded to `fail` (see [Design notes](#design-notes))
 - **Markdown fence stripping**: handles LLM code wrapped in \`\`\` fences
 - **Log rotation**: 5 MB cap with atomic `os.replace()`; single writer, no race
-- **Isolated gates**: `logs/ruff.toml` and `logs/pytest.ini` are auto-created on first run to prevent parent-config bleed
+- **Isolated gates**: `runs/<run-id>/ruff.toml` and `pytest.ini` are auto-created on first run to prevent parent-config bleed
 - **Preflight checks**: verifies `ruff` / `pytest` are on PATH and the coder endpoint is reachable before spending a single token
 
 ---
@@ -78,6 +88,8 @@ Stack: `langgraph`, `langchain-ollama`, `langchain-openai`, `ruff`, `pytest`. Se
 **The repair loop is bounded on purpose.** `MAX_ITER` (default 3) caps attempts. Exhaustion means human escalation, not a hang. On complex tasks this may give up earlier than a human reviewer would prefer — acceptable for CI, where the cost of a false-negative is a re-run, not a lost afternoon.
 
 **Mechanical fixes belong to the tool.** `ruff --fix` runs before `ruff check` and auto-corrects imports and formatting. LLM tokens are too expensive for style fixes a Rust binary does in 40 milliseconds.
+
+**Self-learning is conservative.** Instincts are seeded only from deterministic signals (early abort, ruff F821), not from LLM opinions. Lessons are injected as "apply only if directly relevant" to avoid polluting unrelated tasks.
 
 ---
 
@@ -92,20 +104,25 @@ flowchart LR
     classDef solarizedGreen fill:#859900,stroke:#859900,color:#fdf6e3,stroke-width:2px
     classDef solarizedBlue fill:#268bd2,stroke:#268bd2,color:#fdf6e3,stroke-width:2px
     classDef solarizedCyan fill:#2aa198,stroke:#2aa198,color:#fdf6e3,stroke-width:2px
+    classDef solarizedMagenta fill:#d33682,stroke:#d33682,color:#fdf6e3,stroke-width:2px
 
     A[idea]:::solarizedYellow
     S[spec_writer<br>role: spec]:::solarizedBlue
-    C[coder<br>role: coder]:::solarizedGreen
-    J[judge<br>advisory]:::solarizedOrange
-    T[tester<br>ruff + pytest]:::solarizedCyan
-    E[final verdict<br>exit code]:::solarizedBase02
+    C[coder<br>role: coder<br>+ instincts]:::solarizedGreen
+    J[judge<br>advisory<br>+ cache]:::solarizedOrange
+    T[tester<br>ruff + pytest<br>+ instinct seed]:::solarizedCyan
+    E[escalate<br>HITL only]:::solarizedMagenta
+    F[final verdict<br>exit code]:::solarizedBase02
 
     A --> S
     S --> C
     C --> J
     J -->|advisory| T
     T -->|fail and iter < max_iter| C
-    T -->|pass or budget exhausted| E
+    T -->|early abort or max_iter| E
+    E -->|HITL: retry| C
+    E -->|HITL: accept/abort or no HITL| F
+    T -->|pass| F
 ```
 
 ---
@@ -119,18 +136,23 @@ flowchart LR
 [pipeline]
 max_iter = 3
 judge_blocking = false
+hitl = false   # true = pause at spec and escalation points (requires cilydian-studio)
+preflight_llm = true  # ping LLM endpoints before run
 
 [roles.spec]
 provider = "ollama"
 model = "qwen2.5-coder:7b"
+temperature = 0.0
 
 [roles.coder]
 provider = "ollama"
 model = "qwen2.5-coder:7b"
+temperature = 0.2
 
 [roles.judge]
 provider = "ollama"
 model = "qwen2.5:14b"
+temperature = 0.0
 ```
 
 ### Cloud hybrid profile (free tiers)
@@ -140,6 +162,7 @@ model = "qwen2.5:14b"
 [pipeline]
 max_iter = 3
 judge_blocking = false
+hitl = false
 
 [roles.spec]
 provider = "openai_compat"
@@ -156,7 +179,7 @@ api_key_env = "OPENROUTER_API_KEY"
 [roles.judge]
 provider = "openai_compat"
 base_url = "https://api.groq.com/openai/v1"
-model = "llama-3.3-70b-versatile"
+model = "openai/gpt-oss-120b"
 api_key_env = "GROQ_API_KEY"
 ```
 
@@ -170,13 +193,68 @@ GROQ_API_KEY=your_key_here
 
 ---
 
+## Eval-driven development
+
+CiLydian caches judge verdicts in `memory.db` (SQLite, capped at 500 rows). Export them as promptfoo test suites:
+
+```bash
+# Generate corpus (YAML + Python assertion)
+cilydian export-eval
+
+# Run promptfoo eval
+promptfoo eval -c promptfoo_eval.yaml --max-concurrency 2 ollama:chat:qwen2.5:14b
+```
+
+**What this measures:** agreement between current judge behavior and historical verdicts. A 50% pass rate means the judge disagrees with itself on half the cases — useful signal for prompt iteration or model swap.
+
+**Instincts workflow:**
+
+```bash
+# Show learned lessons (top by hit count)
+python pipeline.py instincts show
+# [  3] f821:Callable       add `from typing import Callable`
+# [  2] early-abort         when previous iteration produced identical code, add a # TODO
+
+# Manually add a lesson
+python pipeline.py instincts add "custom:imports|always start file with stdlib imports used in signatures"
+
+# Clear all lessons
+python pipeline.py instincts clear
+```
+
+---
+
+## Companion: cilydian-studio
+
+**cilydian-studio** is a Textual TUI client for human-in-the-loop sessions. Install from PyPI:
+
+```bash
+pip install cilydian-studio
+```
+
+**Usage:**
+
+```bash
+cilydian-studio "Your task description"
+```
+
+**Features:**
+- Interrupt at spec (continue/edit/reject) and escalation (accept/retry/abort)
+- Resume from checkpoint after Ctrl+C (SqliteSaver persistence)
+- Live log streaming with rich formatting
+
+**Source:** [github.com/sleepti3ht/cilydian-studio](https://github.com/sleepti3ht/cilydian-studio) | [PyPI](https://pypi.org/project/cilydian-studio/)
+
+---
+
 ## Performance
 
 | Metric | Local (7B coder) | Cloud (frontier) |
 |---|---|---|
-| Coder throughput | ~15 tok/s | ~50–100 tok/s |
+| Coder throughput | ~35 tok/s (RTX 3050) | ~50–100 tok/s |
 | Judge throughput | ~3–6 tok/s (partial CPU offload) | ~30–60 tok/s |
 | Full cycle wall time | 4–15 min | 1–3 min |
+| Cache hit rate | ~60-80% on repeated code | ~60-80% on repeated code |
 | Exit code | 0 = gates passed, 1 = failed | 0 = gates passed, 1 = failed |
 
 **Typical run:**
@@ -190,7 +268,7 @@ GROQ_API_KEY=your_key_here
 [judge] score=3, verdict=fail (advisory)
 [tester] ruff rc=0, pytest rc=1 (fail)
 [coder] Iteration 2/3 — fixed issues (2.8s)
-[judge] score=4, verdict=pass (advisory)
+[judge] cache hit key=a3f2e1b0 score=4 verdict=pass (advisory)
 [tester] ruff rc=0, pytest rc=0 (pass)
 ✓ Pipeline completed: gates passed (exit code 0)
 ```
@@ -201,7 +279,7 @@ GROQ_API_KEY=your_key_here
 
 - **Local models (7b-14b) fail convergence** on mid-complexity tasks (e.g., sliding-window rate limiter with exact boolean return) within 3 iterations.
 - **Cloud free-tier models (Groq gpt-oss-120b)** provide better judge quality but have rate limits (200K tokens/day).
-- **CiLydian is an experiment and portfolio artifact**, not a daily development tool. For production code, use manual multi-vendor workflow (DeepSeek/Qwen for prompting, Claude for architecture, Gemini for review, local ruff/pytest for gates).
+- **CiLydian is an exploration of agentic workflows** — a project driven by curiosity about graph orchestration, state machines, and the boundaries of local LLMs in CI, rather than a daily-driver replacement for human developers. For high-stakes production, pair it with manual multi-vendor workflows (DeepSeek for prompting, Claude for architecture, local ruff/pytest for gates).
 
 ---
 
@@ -213,11 +291,14 @@ GROQ_API_KEY=your_key_here
 
 ## Roadmap
 
-- [ ] **GitHub Actions integration** — trigger CiLydian on issue labels
+- [x] **Self-learning instincts** — early abort and F821 lessons injected into coder prompt (v0.3.0)
+- [x] **Export-eval** — verdict memory → promptfoo corpus with deterministic assertions (v0.3.0)
+- [x] **Human-in-the-loop** — interrupt points on spec and escalation via cilydian-studio (v0.3.0)
+- [ ] **GitHub Actions integration** — trigger CiLydian on issue labels or PR comments
 - [ ] **Multi-language support** — extend beyond Python (JavaScript, Go)
-- [ ] **Persistent state** — resume interrupted runs from checkpoint
-- [ ] **Web dashboard** — visualize pipeline runs and logs
-- [ ] **Plugin system** — custom gates beyond ruff/pytest (mypy, bandit)
+- [ ] **Web dashboard** — visualize pipeline runs, logs, and instinct growth
+- [ ] **Plugin system** — custom gates beyond ruff/pytest (mypy, bandit, murmur)
+- [ ] **Living specs** — append run summary (verdict, iterations, key issues) to SPEC.md
 
 ---
 
@@ -228,8 +309,8 @@ Contributions are welcome! Please open an issue or submit a PR.
 ### Development setup
 
 ```bash
-git clone https://github.com/sleepti3ht/cilydian.git
-cd cilydian
+git clone https://github.com/sleepti3ht/CiLydian.git
+cd CiLydian
 
 # Unix / macOS
 python -m venv .venv && source .venv/bin/activate
@@ -242,6 +323,9 @@ pre-commit install  # enforces ruff + pytest on commit
 
 # Run the pipeline on a sample task
 python pipeline.py "Test task"
+
+# Inspect learned lessons
+python pipeline.py instincts show
 ```
 
 ### Code style
