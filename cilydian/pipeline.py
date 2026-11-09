@@ -18,6 +18,7 @@ import re
 import shutil
 import sqlite3
 import subprocess
+import sys
 import tomllib
 from datetime import datetime
 from typing import Literal, TypedDict
@@ -45,6 +46,8 @@ MAX_ITER = 3
 JUDGE_BLOCKING = False
 HITL = False
 PREFLIGHT_LLM = True
+
+JUDGE_PROMPT_VERSION = "v3-nofences-specbound"  # bump on every judge prompt change
 
 
 # ---------- env + config ----------
@@ -192,10 +195,11 @@ def preflight() -> None:
         raise SystemExit(f"[preflight] coder endpoint unreachable: {exc}") from exc
 
 
-# ---------- verdict memory (SQLite, capped) ----------
+# ---------- verdict memory + instincts (SQLite, capped) ----------
 
 
 def memory_init() -> None:
+    """Schema with migrations: verdicts (spec/code added for export-eval), instincts."""
     with sqlite3.connect(MEMORY_DB) as con:
         con.execute("PRAGMA journal_mode=WAL")
         con.execute("""CREATE TABLE IF NOT EXISTS verdicts(
@@ -203,9 +207,17 @@ def memory_init() -> None:
             key TEXT UNIQUE NOT NULL,
             model TEXT, score INTEGER, verdict TEXT, issues TEXT,
             ts TEXT DEFAULT CURRENT_TIMESTAMP)""")
-
-
-JUDGE_PROMPT_VERSION = "v3-nofences-specbound"  # bump on every judge prompt change
+        cols = {r[1] for r in con.execute("PRAGMA table_info(verdicts)")}
+        for col in ("spec", "code"):
+            if col not in cols:
+                con.execute(f"ALTER TABLE verdicts ADD COLUMN {col} TEXT")
+        con.execute("""CREATE TABLE IF NOT EXISTS instincts(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            trigger TEXT UNIQUE NOT NULL,
+            lesson TEXT NOT NULL,
+            hits INTEGER DEFAULT 1,
+            created TEXT DEFAULT CURRENT_TIMESTAMP,
+            last_seen TEXT DEFAULT CURRENT_TIMESTAMP)""")
 
 
 def memory_key(spec: str, code: str) -> str:
@@ -222,17 +234,19 @@ def memory_get(key: str):
         ).fetchone()
 
 
-def memory_put(key: str, verdict: dict) -> None:
+def memory_put(key: str, verdict: dict, spec: str = "", code: str = "") -> None:
     with sqlite3.connect(MEMORY_DB) as con:
         con.execute(
-            "INSERT OR REPLACE INTO verdicts(key, model, score, verdict, issues)"
-            " VALUES(?,?,?,?,?)",
+            "INSERT OR REPLACE INTO verdicts(key, model, score, verdict, issues, spec, code)"
+            " VALUES(?,?,?,?,?,?,?)",
             (
                 key,
                 JUDGE_MODEL,
                 verdict.get("score"),
                 verdict["verdict"],
                 json.dumps(verdict["issues"], ensure_ascii=False),
+                spec,
+                code,
             ),
         )
         # eviction by insertion order (id is monotonic), not by ts (1s resolution)
@@ -241,6 +255,33 @@ def memory_put(key: str, verdict: dict) -> None:
             " (SELECT id FROM verdicts ORDER BY id DESC LIMIT ?)",
             (MEMORY_CAP,),
         )
+
+
+def instinct_bump(trigger: str, lesson: str) -> None:
+    """Record or refresh a lesson learned from a runtime event."""
+    with sqlite3.connect(MEMORY_DB) as con:
+        con.execute(
+            "INSERT INTO instincts(trigger, lesson) VALUES(?,?)"
+            " ON CONFLICT(trigger) DO UPDATE SET"
+            " hits = hits + 1, last_seen = CURRENT_TIMESTAMP",
+            (trigger, lesson),
+        )
+
+
+def instinct_top(n: int = 10) -> list[tuple[str, str, int]]:
+    """Top-N lessons by hits, for injection into the coder prompt."""
+    with sqlite3.connect(MEMORY_DB) as con:
+        return con.execute(
+            "SELECT trigger, lesson, hits FROM instincts ORDER BY hits DESC LIMIT ?",
+            (n,),
+        ).fetchall()
+
+
+def instinct_clear() -> int:
+    with sqlite3.connect(MEMORY_DB) as con:
+        n = con.execute("SELECT COUNT(*) FROM instincts").fetchone()[0]
+        con.execute("DELETE FROM instincts")
+        return n
 
 
 # ---------- utilities ----------
@@ -260,6 +301,16 @@ def strip_fences(text: str) -> str:
     return t
 
 
+def _f821_names(ruff_stdout: str) -> list[str]:
+    """Extract undefined names from ruff F821 lines for instinct seeding."""
+    names: list[str] = []
+    for line in ruff_stdout.splitlines():
+        m = re.search(r"Undefined name [`'\"]([A-Za-z_][A-Za-z0-9_]*)[`'\"]", line)
+        if m and m.group(1) not in names:
+            names.append(m.group(1))
+    return names
+
+
 # ---------- state + nodes ----------
 
 
@@ -275,6 +326,19 @@ class State(TypedDict, total=False):
     gates_verdict: dict
     iteration: int
     human_action: str
+
+
+def _instincts_block() -> str:
+    """Render top lessons as a prompt preface for the coder."""
+    rows = instinct_top(10)
+    if not rows:
+        return ""
+    lines = [
+        "PATTERNS FROM PAST RUNS (apply only if directly relevant):",
+    ]
+    for trigger, lesson, hits in rows:
+        lines.append(f"- [{trigger}, seen {hits}x] {lesson}")
+    return "\n".join(lines) + "\n"
 
 
 def spec_writer(s: State):
@@ -355,7 +419,8 @@ def coder(s: State):
         "is your #1 priority. Style/judge suggestions are secondary.\n"
         "If you cannot fix the failing test, do NOT rewrite the same code - "
         "instead add a `# TODO:` comment explaining what is blocked.\n"
-        "Write only the Python implementation for module `candidate`. "
+        + _instincts_block()
+        + "Write only the Python implementation for module `candidate`. "
         "Raw code only, no markdown fences, no tests. "
         "NO explanations, NO headers, NO prose after the code."
     )
@@ -415,7 +480,7 @@ def judge(s: State):
         verdict["issues"].append(f"Auto-downgraded: score={score} contradicts 'pass'.")
     verdict["gate"] = "judge"
     log("judge", json.dumps(verdict, ensure_ascii=False))
-    memory_put(key, verdict)
+    memory_put(key, verdict, s["spec"], s["code"])
     return {"verdict": verdict, "judge_verdict": verdict}
 
 
@@ -432,9 +497,21 @@ def tester(s: State):
     ruff = run(["ruff", "check", "candidate.py"], LOG_DIR)
     if ruff.returncode != 0:
         log("tester", f"ruff rc={ruff.returncode}\n{ruff.stdout[:500]}")
+        # seed instincts from F821 undefined names
+        for name in _f821_names(ruff.stdout):
+            if name in ("time", "asyncio"):
+                instinct_bump(f"f821:{name}", f"add `import {name}` at top of file")
+            elif name == "Callable":
+                instinct_bump("f821:Callable", "add `from typing import Callable`")
+            elif name == "deque":
+                instinct_bump("f821:deque", "add `from collections import deque`")
+            elif name == "Decimal":
+                instinct_bump("f821:Decimal", "add `from decimal import Decimal`")
+            else:
+                instinct_bump(f"f821:{name}", f"add missing import for `{name}`")
         gates = {
             "ruff": "fail",
-            "pytest": "skipped",  # short-circuit: pytest not run after ruff fail
+            "pytest": "skipped",
             "issues": [f"ruff:{ruff.stdout[:300]}"],
         }
         return {
@@ -528,11 +605,16 @@ def route_tester(s: State) -> Literal["coder", "escalate", "end"]:
     if s["verdict"]["verdict"] == "pass":
         return "end"
     # Early abort: coder produced byte-identical code across iterations.
-    # The repair loop cannot make progress, so spend no more tokens.
+    # Seed an instinct so future runs see the lesson in the coder prompt.
     prev = s.get("prev_code_hash", "")
     curr = s.get("code_hash", "")
     if prev and curr and prev == curr:
         log("tester", f"early abort: coder stuck at hash={curr}")
+        instinct_bump(
+            "early-abort",
+            "when the previous iteration produced identical code, add a `# TODO:`"
+            " explaining what is blocked instead of rewriting the same code",
+        )
         return "escalate" if HITL else "end"
     if s["iteration"] < MAX_ITER:
         return "coder"
@@ -577,6 +659,139 @@ def build_app(checkpointer=None):
     return build_graph().compile(checkpointer=checkpointer)
 
 
+# ---------- export-eval ----------
+
+
+_EVAL_ASSERT_SRC = '''"""promptfoo python assertion: compare judge verdict against cached expectation."""
+import json
+
+def get_assert(output: str, context: dict) -> dict:
+    vars_ = context.get("vars") or {}
+    expected = str(vars_.get("expected_verdict", "")).lower()
+
+    # Find the start of JSON
+    start = output.find("{")
+    if start == -1:
+        return {"pass": False, "reason": "no json found in output"}
+
+    try:
+        # raw_decode stops at the end of the valid JSON object (ignores trailing text)
+        parsed, _ = json.JSONDecoder().raw_decode(output[start:])
+    except json.JSONDecodeError as e:
+        return {"pass": False, "reason": f"invalid json: {e}"}
+
+    got = str(parsed.get("verdict", "")).lower()
+
+    return {
+        "pass": got == expected,
+        "reason": f"expected verdict={expected}, got={got}",
+    }
+'''
+
+
+def _yaml_block(text: str, indent: int) -> list[str]:
+    pad = " " * indent
+    return [
+        pad + ln if ln.strip() else pad.rstrip()
+        for ln in (text or "").splitlines() or [""]
+    ]
+
+
+def export_eval(path: str = "promptfoo_eval.yaml", limit: int = 50) -> int:
+    """Dump cached verdicts as promptfoo tests; corpus grows with every run."""
+    with sqlite3.connect(MEMORY_DB) as con:
+        rows = con.execute(
+            "SELECT spec, code, score, verdict FROM verdicts"
+            " WHERE spec IS NOT NULL AND code IS NOT NULL AND spec <> ''"
+            " ORDER BY id DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+    if not rows:
+        raise SystemExit("[export-eval] no rows with spec/code in memory.db yet")
+
+    if JUDGE_PROVIDER == "ollama":
+        pf_provider = f"ollama:chat:{JUDGE_MODEL}"
+    elif JUDGE_PROVIDER == "openai_compat":
+        if (
+            "openrouter" in str(os.environ.get("OPENROUTER_API_KEY", ""))
+            or "openrouter" in str(JUDGE_MODEL).lower()
+        ):
+            pf_provider = f"openrouter:{JUDGE_MODEL}"
+        else:
+            pf_provider = f"openai:{JUDGE_MODEL}"
+    else:
+        pf_provider = f"ollama:chat:{JUDGE_MODEL}"
+
+    lines = [
+        "# generated by cilydian --export-eval; do not edit by hand",
+        f"# judge_prompt_version: {JUDGE_PROMPT_VERSION}",
+        "# run: promptfoo eval -c promptfoo_eval.yaml",
+        "providers:",
+        f"  - {pf_provider}",
+        "prompts:",
+        "  - |",
+        *_yaml_block(
+            "Rate 1-5: correctness, security, simplicity. Judge ONLY against "
+            "the SPEC's measurable acceptance criteria; do not request features "
+            "beyond the SPEC. Check against SPEC:\n{{spec}}\nCODE:\n{{code}}\n"
+            'Return JSON only: {"score": int, "verdict": "pass"|"fail", "issues": [str]}\n\n'
+            "CRITICAL: Output ONLY raw JSON. NO markdown fences.\n"
+            'CORRECT: {"score": 4, "verdict": "pass", "issues": []}\n'
+            'WRONG: ```json{"score": 4, "verdict": "pass", "issues": []}```',
+            4,
+        ),
+        "tests:",
+    ]
+    for spec, code, score, verdict in rows:
+        lines += [
+            "  - vars:",
+            "      spec: |",
+            *_yaml_block(spec, 8),
+            "      code: |",
+            *_yaml_block(code, 8),
+            f"      expected_verdict: {verdict}",
+            "    assert:",
+            "      - type: javascript",
+            "        value: |",
+            "          const expected = context.vars.expected_verdict;",
+            '          const match = output.match(/"verdict"\\s*:\\s*"(pass|fail)"/i);',
+            "          if (!match) return false;",
+            "          return match[1].toLowerCase() === expected.toLowerCase();",
+        ]
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+
+    # Always overwrite eval_assert.py to ensure it's the latest robust version
+    with open("eval_assert.py", "w", encoding="utf-8") as f:
+        f.write(_EVAL_ASSERT_SRC)
+
+    return len(rows)
+
+
+# ---------- instincts CLI ----------
+
+
+def instincts_show(limit: int = 25) -> int:
+    rows = instinct_top(limit)
+    if not rows:
+        print("(instincts table is empty)")
+        return 0
+    for trigger, lesson, hits in rows:
+        print(f"[{hits:3d}] {trigger:30s}  {lesson}")
+    return len(rows)
+
+
+def instincts_add(arg: str) -> None:
+    if "|" not in arg:
+        raise SystemExit(
+            "[instincts] use format: trigger|lesson  "
+            "(e.g. 'f821:asyncio|add `import asyncio` at top')"
+        )
+    trigger, lesson = arg.split("|", 1)
+    instinct_bump(trigger.strip(), lesson.strip())
+    print(f"[instincts] recorded: {trigger.strip()}")
+
+
 # ---------- CLI ----------
 
 
@@ -584,28 +799,68 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="Agentic CI pipeline: spec -> coder -> judge -> deterministic gates"
     )
-    parser.add_argument(
+    sub = parser.add_subparsers(dest="cmd")
+
+    run_p = sub.add_parser("run", help="run the pipeline (default)")
+    run_p.add_argument(
         "idea", nargs="?", default=DEFAULT_IDEA, help="One-line task description"
     )
-    parser.add_argument(
-        "--config",
-        default="config.toml",
-        help="path to role/model config (default: config.toml)",
-    )
-    parser.add_argument(
-        "--spec",
-        default="",
-        help="path to human-authored SPEC.md; skips LLM spec generation",
-    )
-    parser.add_argument(
-        "--run-id", default=None, help="artifact dir under runs/ (default: timestamp)"
-    )
-    args = parser.parse_args()
+    run_p.add_argument("--config", default="config.toml")
+    run_p.add_argument("--spec", default="")
+    run_p.add_argument("--run-id", default=None)
+
+    ev = sub.add_parser("export-eval", help="dump verdict memory as promptfoo tests")
+    ev.add_argument("--config", default="config.toml")
+    ev.add_argument("--out", default="promptfoo_eval.yaml")
+    ev.add_argument("--limit", type=int, default=50)
+
+    ins = sub.add_parser("instincts", help="manage the learned lessons table")
+    ins.add_argument("action", choices=["show", "add", "clear"])
+    ins.add_argument("arg", nargs="?", default="")
+    ins.add_argument("--config", default="config.toml")
+    ins.add_argument("--limit", type=int, default=25)
+
+    if len(sys.argv) > 1 and sys.argv[1] not in (
+        "run",
+        "export-eval",
+        "instincts",
+        "-h",
+        "--help",
+    ):
+        args = parser.parse_args(["run"] + sys.argv[1:])
+    else:
+        args = parser.parse_args()
+
+    if args.cmd is None:
+        args.cmd = "run"
+        args.idea = DEFAULT_IDEA
+        args.config = "config.toml"
+        args.spec = ""
+        args.run_id = None
+
+    init_from_config(args.config)
+
+    if args.cmd == "export-eval":
+        print(
+            f"[export-eval] wrote {export_eval(args.out, args.limit)} tests to {args.out}"
+        )
+        return 0
+
+    if args.cmd == "instincts":
+        if args.action == "show":
+            instincts_show(args.limit)
+        elif args.action == "add":
+            instincts_add(args.arg)
+        elif args.action == "clear":
+            n = instinct_clear()
+            print(f"[instincts] cleared {n} lessons")
+        return 0
+
+    # run
     if args.spec and not os.path.exists(args.spec):
         raise SystemExit(
             f"[config] --spec file not found: {args.spec!r} (cwd: {os.getcwd()})"
         )
-    init_from_config(args.config)
     preflight()
     begin_run(args.run_id)
 

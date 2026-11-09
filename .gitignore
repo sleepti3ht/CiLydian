@@ -14,3 +14,4 @@ dspy_compiled/
 dist/
 build/
 *.egg-info/
+promptfoo_eval.yaml
