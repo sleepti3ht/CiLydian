@@ -1,17 +1,46 @@
-#.gitignore
+# --- Virtual environments ---
 .venv/
+.venv-pub/
+venv/
+env/
+
+# --- Python caches ---
 __pycache__/
-*.pyc
-.env
-runs/
-memory.db*
-checkpoints.db*
-logs/
-*.old
-.promptfoo/
-dspy_compiled/
-*.pkl
+*.py[cod]
+.ruff_cache/
+.pytest_cache/
+
+# --- Build artifacts ---
 dist/
 build/
 *.egg-info/
-promptfoo_eval.yaml
+*.whl
+*.tar.gz
+
+# --- Coverage ---
+.coverage
+.coverage.*
+htmlcov/
+
+# --- Secrets ---
+.env
+
+# --- Pipeline artifacts ---
+runs/
+logs/
+*.log
+*.old
+memory.db*
+checkpoints.db*
+*.db-wal
+*.db-shm
+*.db
+
+# --- Promptfoo ---
+.promptfoo/
+
+# --- IDE / OS ---
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
