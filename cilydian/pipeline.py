@@ -17,7 +17,7 @@ import os
 import re
 import shutil
 import sqlite3
-import subprocess
+import subprocess  # nosec B404
 import sys
 import tomllib
 from datetime import datetime
@@ -169,7 +169,7 @@ def ensure_isolation() -> None:
 
 
 def run(cmd: list[str], cwd: str) -> subprocess.CompletedProcess:
-    return subprocess.run(
+    return subprocess.run(  # nosec B603
         cmd,
         check=False,
         capture_output=True,
@@ -190,7 +190,7 @@ def preflight() -> None:
     if not PREFLIGHT_LLM:
         return
     try:
-        CODER.invoke("ping")
+        CODER.invoke("ping")  # type: ignore[union-attr]
     except Exception as exc:
         raise SystemExit(f"[preflight] coder endpoint unreachable: {exc}") from exc
 
@@ -347,7 +347,7 @@ def spec_writer(s: State):
         with open(s["spec_path"], encoding="utf-8") as f:
             spec = f.read()
     else:
-        spec = SPEC_LLM.invoke(
+        spec = SPEC_LLM.invoke(  # type: ignore[union-attr]
             "Turn this idea into a MINIMAL SPEC. Include ONLY what the idea states.\n"
             "Sections: Role; Interface (exact PYTHON class/method signatures the "
             "implementation MUST expose - never Java/Go/other languages); Constraints; "
@@ -384,7 +384,7 @@ def spec_writer(s: State):
             with open(os.path.join(LOG_DIR, "SPEC.md"), "w", encoding="utf-8") as f:
                 f.write(spec)
 
-    tests = CODER.invoke(
+    tests = CODER.invoke(  # type: ignore[union-attr]
         f"Generate a pytest file for this spec:\n{spec}\n"
         "Write only test functions, no implementation. "
         "Import the module under test as `from candidate import ...`, "
@@ -424,7 +424,7 @@ def coder(s: State):
         "Raw code only, no markdown fences, no tests. "
         "NO explanations, NO headers, NO prose after the code."
     )
-    code = strip_fences(CODER.invoke(prompt).content)
+    code = strip_fences(CODER.invoke(prompt).content)  # type: ignore[union-attr]
     log("coder", code)
     new_hash = hashlib.sha256(code.encode()).hexdigest()[:12]
     return {
@@ -449,7 +449,7 @@ def judge(s: State):
         }
         return {"verdict": verdict, "judge_verdict": verdict}
 
-    raw = JUDGE.invoke(
+    raw = JUDGE.invoke(  # type: ignore[union-attr]
         "Rate 1-5: correctness, security, simplicity. Judge ONLY against "
         "the SPEC's measurable acceptance criteria; do not request features "
         f"beyond the SPEC. Check against SPEC:\n{s['spec']}\nCODE:\n{s['code']}\n"

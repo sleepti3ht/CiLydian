@@ -30,3 +30,6 @@ include = ["cilydian*"]
 [project.urls]
 Homepage = "https://github.com/sleepti3ht/CiLydian"
 Repository = "https://github.com/sleepti3ht/CiLydian"
+
+[tool.bandit]
+skips = ["B404", "B603"]
